@@ -9,9 +9,11 @@ import 'dart:typed_data';
 /// and tells the user exactly what is missing. That is deliberate:
 /// sending the wrong bytes could put the collector in a bad state.
 class CollectorConfig {
-  /// Default collector MAC from the project notes. Change it here if
-  /// nRF Connect shows a different MAC for your collector.
-  static const String collectorMac = '80:6A:34:4E:DA:6F';
+  /// BLE MAC seen in the 2026-10-25 HCI log, advertising as
+  /// TH1921162N0B260600161. Note: this is 1 higher than the Wi-Fi MAC
+  /// ending 6F recorded earlier; BLE and Wi-Fi MACs often differ by 1.
+  /// The app scans BLE, so it must use this BLE MAC.
+  static const String collectorMac = '80:6A:34:4E:DA:70';
 
   /// TODO: fill from the HCI snoop log.
   static const String serviceUuid = 'TODO_FROM_SNOOP_LOG';
