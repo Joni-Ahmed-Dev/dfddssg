@@ -31,17 +31,37 @@ class _ValueQueue {
   }
 }
 
+/// Normalizes a UUID string so 16-bit and 128-bit forms compare equal.
+/// Handles full Bluetooth base UUIDs with or without hyphens, any case,
+/// and short 16-bit forms. Returns the 16-bit value when the UUID is a
+/// Bluetooth base UUID, otherwise the lowercased hyphen-free string.
+String _normalizeUuid(String uuid) {
+  final compact = uuid.toLowerCase().replaceAll('-', '');
+  // Bluetooth base UUID without hyphens: 0000xxxx00001000800000805f9b34fb
+  if (compact.length == 32 &&
+      compact.startsWith('0000') &&
+      compact.endsWith('00001000800000805f9b34fb')) {
+    return compact.substring(4, 8);
+  }
+  return compact;
+}
+
+/// Short form of a UUID for diagnostics (the 16-bit value when possible).
+String _shortUuid(String uuid) => _normalizeUuid(uuid);
+
 BluetoothCharacteristic? _findChar(
   List<BluetoothService> services,
   String serviceUuid,
   String charUuid,
 ) {
+  final wantService = _normalizeUuid(serviceUuid);
+  final wantChar = _normalizeUuid(charUuid);
   for (final service in services) {
-    if (service.uuid.str.toLowerCase() != serviceUuid.toLowerCase()) {
+    if (_normalizeUuid(service.uuid.str) != wantService) {
       continue;
     }
     for (final c in service.characteristics) {
-      if (c.uuid.str.toLowerCase() == charUuid.toLowerCase()) {
+      if (_normalizeUuid(c.uuid.str) == wantChar) {
         return c;
       }
     }
@@ -125,7 +145,15 @@ class CollectorBleService {
         CollectorConfig.responseCharacteristicUuid,
       );
       if (cmd == null || scan == null || resp == null) {
-        throw StateError('কালেক্টরে লেখার জায়গাটা পাওয়া যায়নি। UUID গুলো আবার মিলিয়ে দেখো।');
+        // Include what WAS discovered, so the exact UUIDs can be read
+        // from a screenshot and the matching fixed.
+        final found = services
+            .map((s) =>
+                '${_shortUuid(s.uuid.str)}:[${s.characteristics.map((c) => _shortUuid(c.uuid.str)).join(',')}]')
+            .join(' ');
+        throw StateError(
+          'কালেক্টরে লেখার জায়গাটা পাওয়া যায়নি। পাওয়া গেছে: $found',
+        );
       }
 
       final scanQueue = _ValueQueue();
