@@ -9,12 +9,12 @@ import 'worker_status.dart';
 /// Automatic reconnect for the Things-X collector.
 ///
 /// How it works: a foreground service checks the Cloudflare Worker status
-/// every 2 minutes. When the inverter data has not arrived for 5 minutes,
-/// the exact condition the Worker uses for its
-/// "⚠️ ইনভার্টারের ডেটা আসছে না" warning, the service finds the collector
-/// over Bluetooth and sends the saved Wi-Fi credentials by itself, again
-/// and again until the data comes back. Once the user turns it on and
-/// grants the one-time permissions, no further tap or permission is needed.
+/// every minute. When the inverter data has not arrived for 2 minutes
+/// (data normally arrives about once a minute), the service finds the
+/// collector over Bluetooth and sends the saved Wi-Fi credentials by
+/// itself, again and again until the data comes back. Once the user
+/// turns it on and grants the one-time permissions, no further tap or
+/// permission is needed.
 ///
 /// When the phone is not near the inverter, the service cannot see the
 /// collector over Bluetooth. It then says so in its notification and in
@@ -40,7 +40,7 @@ class AutoReconnect {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(120000),
+        eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: true,
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
@@ -108,7 +108,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
     );
   }
 
-  /// Called every 2 minutes. Runs the check without blocking the next
+  /// Called every minute. Runs the check without blocking the next
   /// tick; overlapping ticks are skipped.
   @override
   void onRepeatEvent(DateTime timestamp) {
