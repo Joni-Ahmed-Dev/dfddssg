@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate Android scaffold from Flutter template
+        run: |
+          flutter create --org com.example --project-name inverter_one_tap /tmp/template_app
+          rm -rf ./android
+          cp -r /tmp/template_app/android ./android
+          cp /tmp/template_app/analysis_options.yaml ./analysis_options.yaml || true
+          cp android-manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          ls android/app/src/main/
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: inverter-one-tap-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Create release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          body: "One-tap inverter app build from ${{ github.sha }}. BLE protocol filled from the 2026-11-06 HCI snoop log (WIFI_SET over char 0xFF99)."
+          files: build/app/outputs/flutter-apk/app-release.apk
