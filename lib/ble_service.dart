@@ -96,20 +96,38 @@ class CollectorBleService {
   /// is seen advertising. The caller decides what to show the user.
   Future<bool> scanForCollector({Duration timeout = const Duration(seconds: 12)}) async {
     _device = null;
-    await FlutterBluePlus.startScan(timeout: timeout);
-    // scanResults emits the accumulated LIST of results, not one result.
-    await for (final results in FlutterBluePlus.scanResults) {
+    // Listen for the collector and complete as soon as it is seen.
+    // A plain `await for` on scanResults would hang forever when the
+    // collector is not found, because the stream never closes when the
+    // scan stops; the timeout below guarantees this always returns.
+    // That hang also froze the auto-reconnect service: its _busy flag
+    // stayed true and no later check ever ran.
+    final completer = Completer<bool>();
+    late StreamSubscription<List<ScanResult>> sub;
+    sub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
         final remoteId = result.device.remoteId.str.toUpperCase();
         if (remoteId == CollectorConfig.collectorMac.toUpperCase()) {
           _device = result.device;
-          await FlutterBluePlus.stopScan();
-          return true;
+          if (!completer.isCompleted) completer.complete(true);
         }
       }
+    });
+    try {
+      await FlutterBluePlus.startScan(timeout: timeout);
+      final found = await completer.future.timeout(
+        timeout + const Duration(seconds: 2),
+        onTimeout: () => false,
+      );
+      return found && _device != null;
+    } finally {
+      await sub.cancel();
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {
+        // Scan may already be stopped; best effort only.
+      }
     }
-    await FlutterBluePlus.stopScan();
-    return _device != null;
   }
 
   /// Connects, runs the Wi-Fi scan, writes the credentials, waits for
@@ -202,7 +220,12 @@ class CollectorBleService {
         final confirmDeadline = DateTime.now().add(const Duration(seconds: 20));
         while (DateTime.now().isBefore(confirmDeadline)) {
           final remaining = confirmDeadline.difference(DateTime.now());
-          final value = await respQueue.next(timeout: remaining);
+          List<int> value;
+          try {
+            value = await respQueue.next(timeout: remaining);
+          } on TimeoutException {
+            break; // No confirmation in time; friendly error below.
+          }
           final text = _asText(value);
           if (!text.contains('"cmd":"wifi_set"')) continue;
           final Map<String, dynamic> reply =
