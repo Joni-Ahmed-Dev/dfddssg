@@ -99,6 +99,11 @@ class AutoReconnectTaskHandler extends TaskHandler {
   bool _busy = false;
   String _lastAttempt = 'none';
   int? _lastAttemptAt;
+  // When the credentials were last sent. The collector needs a minute
+  // or two to join Wi-Fi and upload data after WIFI_SET, so a new
+  // provision inside this window would only interrupt it.
+  DateTime? _lastProvisionAt;
+  static const Duration _provisionCooldown = Duration(minutes: 3);
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -129,6 +134,9 @@ class AutoReconnectTaskHandler extends TaskHandler {
         return;
       }
       if (!status.isStale) {
+        // Data is flowing again; clear any old attempt shown in the app.
+        _lastAttempt = 'none';
+        _lastAttemptAt = null;
         await _setNotificationText('অটো রিকানেক্ট চালু আছে');
         _sendStatus(
           stale: false,
@@ -159,6 +167,20 @@ class AutoReconnectTaskHandler extends TaskHandler {
         );
         return;
       }
+      // Do not send the credentials again while the collector is still
+      // joining Wi-Fi from the last provision; it would interrupt it.
+      if (_lastProvisionAt != null &&
+          DateTime.now().difference(_lastProvisionAt!) < _provisionCooldown) {
+        await _setNotificationText('আবার যুক্ত করার চেষ্টা চলছে');
+        _sendStatus(
+          stale: true,
+          lastState: status.lastState,
+          lastVoltage: status.lastVoltage,
+          lastDataTs: status.lastDataTs,
+          detail: 'পাঠানো হয়েছে, কালেক্টর যুক্ত হওয়ার অপেক্ষায় আছি।',
+        );
+        return;
+      }
       final found = await _ble.scanForCollector();
       if (!found) {
         _lastAttempt = 'not_near';
@@ -175,6 +197,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
       }
       try {
         await _ble.provision(ssid, password);
+        _lastProvisionAt = DateTime.now();
       } catch (e) {
         _lastAttempt = 'failed';
         _lastAttemptAt = DateTime.now().millisecondsSinceEpoch;
@@ -188,8 +211,9 @@ class AutoReconnectTaskHandler extends TaskHandler {
         );
         return;
       }
-      // Provision sent. Give the collector a moment, then confirm data.
-      await Future<void>.delayed(const Duration(seconds: 30));
+      // Provision sent. Give the collector a minute to join Wi-Fi and
+      // upload data, then confirm data is flowing again.
+      await Future<void>.delayed(const Duration(seconds: 60));
       final after = await fetchWorkerStatus();
       if (after != null && !after.isStale) {
         _lastAttempt = 'success';
