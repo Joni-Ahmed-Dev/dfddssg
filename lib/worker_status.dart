@@ -3,14 +3,18 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 /// Reads the Cloudflare Worker status endpoint and tells whether the
-/// inverter data is flowing. This is the same condition the Worker uses
-/// for its "data not coming" warning: no new inverter data for 5 minutes.
+/// inverter data is flowing. The collector normally sends new data
+/// about once a minute, so data is treated as stale after 2 minutes
+/// without it: fast enough to reconnect within about 2-3 minutes of
+/// data stopping, while still allowing one delayed upload without a
+/// false alarm. (The Worker itself keeps its own 5-minute threshold
+/// for the Telegram "data not coming" warning.)
 class WorkerStatus {
   static const String statusUrl =
       'https://grid-alert.aminuljoni180.workers.dev/fast-status';
 
-  /// Same threshold as the Worker (STALE_MS = 5 minutes).
-  static const Duration staleAfter = Duration(minutes: 5);
+  /// Data is stale after 2 minutes without new data.
+  static const Duration staleAfter = Duration(minutes: 2);
 
   /// "up", "down" or "unknown".
   final String lastState;
@@ -28,8 +32,8 @@ class WorkerStatus {
   });
 
   /// True when the inverter data has not arrived for [staleAfter].
-  /// This is exactly when the Worker sends its
-  /// "⚠️ ইনভার্টারের ডেটা আসছে না" warning.
+  /// This is sooner than the Worker's own 5-minute warning, so the
+  /// app starts reconnecting before the Telegram warning is sent.
   bool get isStale {
     if (lastDataTs == null) return true;
     final age = DateTime.now().millisecondsSinceEpoch - lastDataTs!;
