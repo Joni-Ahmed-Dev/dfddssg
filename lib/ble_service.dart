@@ -77,12 +77,15 @@ class CollectorBleService {
   Future<bool> scanForCollector({Duration timeout = const Duration(seconds: 12)}) async {
     _device = null;
     await FlutterBluePlus.startScan(timeout: timeout);
-    await for (final result in FlutterBluePlus.scanResults) {
-      final remoteId = result.device.remoteId.str.toUpperCase();
-      if (remoteId == CollectorConfig.collectorMac.toUpperCase()) {
-        _device = result.device;
-        await FlutterBluePlus.stopScan();
-        return true;
+    // scanResults emits the accumulated LIST of results, not one result.
+    await for (final results in FlutterBluePlus.scanResults) {
+      for (final result in results) {
+        final remoteId = result.device.remoteId.str.toUpperCase();
+        if (remoteId == CollectorConfig.collectorMac.toUpperCase()) {
+          _device = result.device;
+          await FlutterBluePlus.stopScan();
+          return true;
+        }
       }
     }
     await FlutterBluePlus.stopScan();
