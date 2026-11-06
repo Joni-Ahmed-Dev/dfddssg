@@ -99,6 +99,9 @@ class AutoReconnectTaskHandler extends TaskHandler {
   bool _busy = false;
   String _lastAttempt = 'none';
   int? _lastAttemptAt;
+  // Whether the collector is in Bluetooth range right now, as seen by
+  // the last scan. Null means no scan has reported yet.
+  bool? _lastInRange;
   // When the credentials were last sent. The collector needs a minute
   // or two to join Wi-Fi and upload data after WIFI_SET, so a new
   // provision inside this window would only interrupt it.
@@ -133,22 +136,52 @@ class AutoReconnectTaskHandler extends TaskHandler {
         _sendStatus(stale: false, detail: 'Worker এর সাথে যোগাযোগ হয়নি।');
         return;
       }
+      // Is the collector in Bluetooth range right now? One scan serves
+      // both the range display and the provision below, so the device
+      // found here is reused instead of scanning again.
+      final inRange = await _ble.scanForCollector(
+        timeout: const Duration(seconds: 10),
+      );
+      _lastInRange = inRange;
       if (!status.isStale) {
         // Data is flowing again; clear any old attempt shown in the app.
         _lastAttempt = 'none';
         _lastAttemptAt = null;
-        await _setNotificationText('অটো রিকানেক্ট চালু আছে');
+        await _setNotificationText(
+          inRange
+              ? 'অটো রিকানেক্ট চালু আছে, ইনভার্টার কাছে আছে'
+              : 'অটো রিকানেক্ট চালু আছে',
+        );
         _sendStatus(
           stale: false,
           lastState: status.lastState,
           lastVoltage: status.lastVoltage,
           lastDataTs: status.lastDataTs,
-          detail: 'ডেটা আসছে।',
+          inRange: inRange,
+          detail: inRange
+              ? 'ডেটা আসছে, ইনভার্টার ব্লুটুথে পাওয়া গেছে।'
+              : 'ডেটা আসছে।',
         );
         return;
       }
-      // Data is stale: the Worker warning condition. Reconnect by itself.
-      await _setNotificationText('আবার যুক্ত করার চেষ্টা চলছে');
+      // Data is stale. When the collector is out of range there is
+      // nothing to connect to; the app shows it is still scanning.
+      if (!inRange) {
+        _lastAttempt = 'not_near';
+        _lastAttemptAt = DateTime.now().millisecondsSinceEpoch;
+        await _setNotificationText('মোবাইল ইনভার্টারের কাছে নাও');
+        _sendStatus(
+          stale: true,
+          lastState: status.lastState,
+          lastVoltage: status.lastVoltage,
+          lastDataTs: status.lastDataTs,
+          inRange: inRange,
+          detail: 'মোবাইল ইনভার্টারের কাছে নাও।',
+        );
+        return;
+      }
+      // Data is stale and the collector is in range: connect by itself
+      // and send the saved Wi-Fi credentials.
       final ssid = await _storage.readSsid();
       final password = await _storage.readPassword();
       if (ssid == null ||
@@ -163,6 +196,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
           lastState: status.lastState,
           lastVoltage: status.lastVoltage,
           lastDataTs: status.lastDataTs,
+          inRange: inRange,
           detail: 'ওয়াইফাই তথ্য সেভ করা নেই। অ্যাপে গিয়ে একবার সেভ করো।',
         );
         return;
@@ -177,24 +211,12 @@ class AutoReconnectTaskHandler extends TaskHandler {
           lastState: status.lastState,
           lastVoltage: status.lastVoltage,
           lastDataTs: status.lastDataTs,
+          inRange: inRange,
           detail: 'পাঠানো হয়েছে, কালেক্টর যুক্ত হওয়ার অপেক্ষায় আছি।',
         );
         return;
       }
-      final found = await _ble.scanForCollector();
-      if (!found) {
-        _lastAttempt = 'not_near';
-        _lastAttemptAt = DateTime.now().millisecondsSinceEpoch;
-        await _setNotificationText('মোবাইল ইনভার্টারের কাছে নাও');
-        _sendStatus(
-          stale: true,
-          lastState: status.lastState,
-          lastVoltage: status.lastVoltage,
-          lastDataTs: status.lastDataTs,
-          detail: 'মোবাইল ইনভার্টারের কাছে নাও।',
-        );
-        return;
-      }
+      await _setNotificationText('আবার যুক্ত করার চেষ্টা চলছে');
       try {
         await _ble.provision(ssid, password);
         _lastProvisionAt = DateTime.now();
@@ -207,6 +229,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
           lastState: status.lastState,
           lastVoltage: status.lastVoltage,
           lastDataTs: status.lastDataTs,
+          inRange: inRange,
           detail: 'যুক্ত করা যায়নি: $e',
         );
         return;
@@ -224,6 +247,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
           lastState: after.lastState,
           lastVoltage: after.lastVoltage,
           lastDataTs: after.lastDataTs,
+          inRange: inRange,
           detail: 'আবার যুক্ত হয়েছে, ডেটা আসছে।',
         );
       } else {
@@ -235,6 +259,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
           lastState: status.lastState,
           lastVoltage: status.lastVoltage,
           lastDataTs: status.lastDataTs,
+          inRange: inRange,
           detail: 'পাঠানো হয়েছে, কিন্তু ডেটা এখনো আসেনি। আবার চেষ্টা চলবে।',
         );
       }
@@ -256,6 +281,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
     String? lastState,
     double? lastVoltage,
     int? lastDataTs,
+    bool? inRange,
     required String detail,
   }) {
     FlutterForegroundTask.sendDataToMain(<String, dynamic>{
@@ -265,6 +291,7 @@ class AutoReconnectTaskHandler extends TaskHandler {
       'lastState': lastState,
       'lastVoltage': lastVoltage,
       'lastDataTs': lastDataTs,
+      'inRange': inRange ?? _lastInRange,
       'lastAttempt': _lastAttempt,
       'lastAttemptAt': _lastAttemptAt,
       'detail': detail,
