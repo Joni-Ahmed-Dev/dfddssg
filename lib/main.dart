@@ -52,6 +52,9 @@ class _HomePageState extends State<HomePage> {
   String _autoDetail = 'অটো রিকানেক্ট বন্ধ আছে।';
   String _workerLine = 'Worker এর অবস্থা জানা নেই।';
   String _lastAttemptLine = '';
+  // Whether the collector is in Bluetooth range right now, as reported
+  // by the auto-reconnect service. Null means no scan has reported yet.
+  bool? _inRange;
 
   @override
   void initState() {
@@ -76,6 +79,8 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     setState(() {
       _autoDetail = (data['detail'] as String?) ?? _autoDetail;
+      final inRange = data['inRange'];
+      if (inRange is bool) _inRange = inRange;
       final lastAttempt = data['lastAttempt'] as String?;
       final lastAttemptAt = data['lastAttemptAt'] as int?;
       if (lastAttempt != null && lastAttempt != 'none' && lastAttemptAt != null) {
@@ -348,6 +353,34 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 4),
             const Text(
               'চালু থাকলে ডেটা বন্ধ হলেই অ্যাপ নিজে থেকে বারবার যুক্ত করার চেষ্টা করবে। আর কোনো পারমিশন বা ট্যাপ লাগবে না।',
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _inRange == true
+                        ? Colors.green
+                        : _inRange == false
+                            ? Colors.amber
+                            : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _inRange == true
+                        ? 'ইনভার্টার ব্লুটুথে পাওয়া গেছে, কাছে আছে।'
+                        : _inRange == false
+                            ? 'ইনভার্টার খুঁজছে, কাছে নেই।'
+                            : 'ইনভার্টার খুঁজছে...',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             SwitchListTile(
