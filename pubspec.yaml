@@ -12,6 +12,8 @@ dependencies:
   flutter_blue_plus: ^1.31.0
   flutter_secure_storage: ^9.0.0
   permission_handler: ^11.3.0
+  http: ^1.6.0
+  flutter_foreground_task: ^11.0.3
 
 dev_dependencies:
   flutter_test:
