@@ -1,11 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'auto_reconnect.dart';
 import 'ble_service.dart';
 import 'config.dart';
 import 'storage_service.dart';
+import 'worker_status.dart';
 
-void main() => runApp(const OneTapApp());
+void main() {
+  // Lets the background auto-reconnect service talk to this UI.
+  FlutterForegroundTask.initCommunicationPort();
+  AutoReconnect.init();
+  runApp(const OneTapApp());
+}
 
 class OneTapApp extends StatelessWidget {
   const OneTapApp({super.key});
@@ -38,10 +46,92 @@ class _HomePageState extends State<HomePage> {
   bool _found = false;
   String _status = 'শুরু করার আগে একবার ওয়াইফাই তথ্য সেভ করো।';
 
+  // Auto reconnect state.
+  bool _autoRunning = false;
+  bool _autoBusy = false;
+  String _autoDetail = 'অটো রিকানেক্ট বন্ধ আছে।';
+  String _workerLine = 'Worker এর অবস্থা জানা নেই।';
+  String _lastAttemptLine = '';
+
   @override
   void initState() {
     super.initState();
+    FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
     _refreshSaved();
+    _refreshAutoRunning();
+    _refreshWorkerStatus();
+  }
+
+  @override
+  void dispose() {
+    FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
+    _ssidController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _onReceiveTaskData(Object data) {
+    if (data is! Map<String, dynamic>) return;
+    if (data['type'] != 'auto_status') return;
+    if (!mounted) return;
+    setState(() {
+      _autoDetail = (data['detail'] as String?) ?? _autoDetail;
+      final lastAttempt = data['lastAttempt'] as String?;
+      final lastAttemptAt = data['lastAttemptAt'] as int?;
+      if (lastAttempt != null && lastAttempt != 'none' && lastAttemptAt != null) {
+        _lastAttemptLine =
+            'শেষ চেষ্টা: ${_attemptLabel(lastAttempt)} ${_timeAgo(lastAttemptAt)}';
+      }
+      final lastDataTs = data['lastDataTs'] as int?;
+      final lastState = data['lastState'] as String?;
+      final lastVoltage = data['lastVoltage'];
+      if (lastDataTs != null) {
+        _workerLine = _workerLineFor(lastState, lastVoltage, lastDataTs);
+      }
+    });
+  }
+
+  String _attemptLabel(String attempt) {
+    switch (attempt) {
+      case 'success':
+        return 'সফল হয়েছে';
+      case 'not_near':
+        return 'ফোন কাছে ছিল না';
+      case 'failed':
+        return 'হয়নি';
+      case 'no_credentials':
+        return 'ওয়াইফাই তথ্য সেভ নেই';
+      default:
+        return attempt;
+    }
+  }
+
+  String _timeAgo(int epochMs) {
+    final diff = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(epochMs),
+    );
+    if (diff.inSeconds < 60) return 'এইমাত্র';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} মিনিট আগে';
+    return '${diff.inHours} ঘণ্টা আগে';
+  }
+
+  String _workerLineFor(String? lastState, Object? lastVoltage, int lastDataTs) {
+    final age = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(lastDataTs),
+    );
+    final state = lastState == 'up'
+        ? 'বিদ্যুৎ আছে'
+        : lastState == 'down'
+            ? 'বিদ্যুৎ নেই'
+            : 'অবস্থা জানা নেই';
+    final volt = lastVoltage is num ? '${lastVoltage.toStringAsFixed(0)}V' : '';
+    final ageText = age.inSeconds < 60
+        ? 'এইমাত্র'
+        : age.inMinutes < 60
+            ? '${age.inMinutes} মিনিট আগে'
+            : '${age.inHours} ঘণ্টা আগে';
+    final stale = age > WorkerStatus.staleAfter ? ' (ডেটা আসছে না)' : '';
+    return '$state $volt, শেষ ডেটা $ageText$stale';
   }
 
   Future<void> _refreshSaved() async {
@@ -53,6 +143,36 @@ class _HomePageState extends State<HomePage> {
         if (saved && ssid != null) _ssidController.text = ssid;
       });
     }
+  }
+
+  Future<void> _refreshAutoRunning() async {
+    final running = await AutoReconnect.isRunning;
+    if (mounted) {
+      setState(() {
+        _autoRunning = running;
+        if (running && _autoDetail == 'অটো রিকানেক্ট বন্ধ আছে.') {
+          _autoDetail = 'অটো রিকানেক্ট চালু আছে।';
+        }
+      });
+    }
+  }
+
+  Future<void> _refreshWorkerStatus() async {
+    final status = await fetchWorkerStatus();
+    if (!mounted) return;
+    setState(() {
+      if (status == null) {
+        _workerLine = 'Worker এর সাথে যোগাযোগ হয়নি।';
+      } else if (status.lastDataTs == null) {
+        _workerLine = 'ডেটা এখনো আসেনি।';
+      } else {
+        _workerLine = _workerLineFor(
+          status.lastState,
+          status.lastVoltage,
+          status.lastDataTs!,
+        );
+      }
+    });
   }
 
   Future<bool> _ensurePermissions() async {
@@ -122,6 +242,48 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _toggleAuto(bool enable) async {
+    if (_autoBusy) return;
+    setState(() => _autoBusy = true);
+    try {
+      if (enable) {
+        if (!_hasSaved) {
+          setState(() {
+            _autoDetail = 'আগে ওয়াইফাই তথ্য সেভ করো, তারপর অটো চালু করো।';
+            _autoRunning = false;
+          });
+          return;
+        }
+        if (!await _ensurePermissions()) {
+          setState(() {
+            _autoDetail = 'ব্লুটুথ পারমিশন ছাড়া অটো চলবে না। পারমিশন দাও।';
+            _autoRunning = false;
+          });
+          return;
+        }
+        await AutoReconnect.requestPermissions();
+        final result = await AutoReconnect.start();
+        final running = await AutoReconnect.isRunning;
+        setState(() {
+          _autoRunning = running;
+          _autoDetail = running
+              ? 'অটো রিকানেক্ট চালু হয়েছে। ডেটা বন্ধ হলে নিজে থেকে আবার যুক্ত করবে।'
+              : 'অটো চালু হয়নি: $result';
+        });
+      } else {
+        await AutoReconnect.stop();
+        setState(() {
+          _autoRunning = false;
+          _autoDetail = 'অটো রিকানেক্ট বন্ধ আছে।';
+        });
+      }
+    } catch (e) {
+      setState(() => _autoDetail = 'অটো চালু/বন্ধ করতে সমস্যা: $e');
+    } finally {
+      if (mounted) setState(() => _autoBusy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -177,9 +339,50 @@ class _HomePageState extends State<HomePage> {
             if (_found) const SizedBox(height: 8),
             if (_found) const Text('কালেক্টর এই মুহূর্তে ব্লুটুথে দেখা গেছে।'),
             const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              'অটো রিকানেক্ট',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'চালু থাকলে ডেটা বন্ধ হলেই অ্যাপ নিজে থেকে বারবার যুক্ত করার চেষ্টা করবে। আর কোনো পারমিশন বা ট্যাপ লাগবে না।',
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              title: const Text('অটো রিকানেক্ট চালু'),
+              value: _autoRunning,
+              onChanged: _autoBusy ? null : _toggleAuto,
+              contentPadding: EdgeInsets.zero,
+            ),
+            Text(_autoDetail),
+            if (_lastAttemptLine.isNotEmpty) const SizedBox(height: 4),
+            if (_lastAttemptLine.isNotEmpty) Text(_lastAttemptLine),
+            const SizedBox(height: 12),
+            Text(_workerLine),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _refreshWorkerStatus,
+                    child: const Text('অবস্থা দেখো'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _busy ? null : _oneTap,
+                    child: const Text('এখনই চেষ্টা করো'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
             const Text(
               'মনে রাখো: ফোন ইনভার্টারের কাছে না থাকলে এই বোতাম কাজ করবে না। '
-              'আর প্রোটোকল না জানা পর্যন্ত অ্যাপ নিজে জানিয়ে দেবে কী বাকি আছে।',
+              'অটো চালু রাখতে ব্যাটারি সেটিংসে এই অ্যাপে No restrictions দাও আর Autostart চালু করো, নাহলে ফোন ব্যাকগ্রাউন্ডে অ্যাপ বন্ধ করে দিতে পারে।',
             ),
           ],
         ),
