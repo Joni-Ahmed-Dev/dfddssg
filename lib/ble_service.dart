@@ -132,14 +132,19 @@ class CollectorBleService {
 
   /// Connects, runs the Wi-Fi scan, writes the credentials, waits for
   /// the collector's own confirmation, then disconnects.
+  /// Returns the Wi-Fi names the collector could see in its scan.
   /// Throws a readable message on failure. Never logs the payload.
-  Future<void> provision(String ssid, String password) async {
+  Future<List<String>> provision(String ssid, String password) async {
     if (CollectorConfig.payloadMode == 'todo') {
       throw StateError(
         'প্রোটোকল এখনো জানা যায়নি। HCI স্নুপ লগ থেকে '
         'service, characteristic আর ডেটা ফরম্যাট বসাতে হবে।',
       );
     }
+    // Trim: an invisible leading or trailing space would make the
+    // collector look for a network that does not exist.
+    final cleanSsid = ssid.trim();
+    final cleanPassword = password.trim();
     final device = _device;
     if (device == null) {
       throw StateError('কালেক্টর পাওয়া যায়নি। ইনভার্টারের কাছে গিয়ে আবার চেষ্টা করো।');
@@ -194,9 +199,12 @@ class CollectorBleService {
         }
 
         // 2. Poll getwifi until the scan ends ("endwifi"), at most 30s.
-        // Results arrive as JSON chunks; they are only for the list,
-        // the real test is the WIFI_SET reply below, so a timeout here
-        // does not fail the job.
+        // Collect the Wi-Fi names the collector can actually see, so
+        // we only send WIFI_SET for a network it found. If the scan
+        // finished and the target is not in the list, sending WIFI_SET
+        // would only get a "wifi *** NO! NO! NO! ***" back.
+        final foundSsids = <String>{};
+        var scanFinished = false;
         final scanDeadline = DateTime.now().add(const Duration(seconds: 30));
         while (DateTime.now().isBefore(scanDeadline)) {
           await scan.write(
@@ -205,15 +213,40 @@ class CollectorBleService {
           );
           try {
             final value = await scanQueue.next(timeout: const Duration(seconds: 3));
-            if (_asText(value) == 'endwifi') break;
+            final text = _asText(value);
+            if (text == 'endwifi') {
+              scanFinished = true;
+              break;
+            }
+            if (text.startsWith('[')) {
+              try {
+                final List<dynamic> list = jsonDecode(text) as List<dynamic>;
+                for (final item in list) {
+                  if (item is Map<String, dynamic>) {
+                    final s = item['s'];
+                    if (s is String && s.isNotEmpty) foundSsids.add(s);
+                  }
+                }
+              } catch (_) {
+                // A partial or unexpected chunk; ignore it.
+              }
+            }
           } on TimeoutException {
             // No reply yet; ask again.
             continue;
           }
         }
 
+        if (scanFinished && !foundSsids.contains(cleanSsid)) {
+          throw StateError(
+            'কালেক্টর ওয়াইফাই "$cleanSsid" দেখতে পাচ্ছে না। পাওয়া গেছে: '
+            '${foundSsids.isEmpty ? 'কিছুই না' : foundSsids.join(', ')}',
+          );
+        }
+
         // 3. Send the credentials.
-        final Uint8List payload = CollectorConfig.buildPayload(ssid, password);
+        final Uint8List payload =
+            CollectorConfig.buildPayload(cleanSsid, cleanPassword);
         await cmd.write(payload, withoutResponse: false);
 
         // 4. Wait for the collector's own confirmation on 0xFF22.
@@ -231,7 +264,8 @@ class CollectorBleService {
           final Map<String, dynamic> reply =
               jsonDecode(text) as Map<String, dynamic>;
           if (reply['code'] == 0) {
-            return; // Success. Disconnect in the finally below.
+            // Success. Disconnect in the finally below.
+            return foundSsids.toList();
           }
           throw StateError('কালেক্টর নিলো না: ${reply['msg'] ?? 'অজানা কারণ'}');
         }

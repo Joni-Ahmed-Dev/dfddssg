@@ -46,7 +46,14 @@ class CollectorConfig {
   /// Builds the bytes to write, once the format is known.
   /// Never log or print the returned bytes: they contain the password.
   static Uint8List buildPayload(String ssid, String password) {
-    // Exact format seen in the snoop log: WIFI_SET <SSID> <password>
-    return Uint8List.fromList(utf8.encode('WIFI_SET $ssid $password'));
+    // Exact format seen in the snoop log: WIFI_SET <SSID> <password>.
+    // Trim both: an invisible leading or trailing space (from a paste
+    // or a keyboard) would make the collector look for a network that
+    // does not exist, or fail the password, and answer NO.
+    final cleanSsid = ssid.trim();
+    final cleanPassword = password.trim();
+    return Uint8List.fromList(
+      utf8.encode('WIFI_SET $cleanSsid $cleanPassword'),
+    );
   }
 }

@@ -246,8 +246,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _save() async {
+    // Trim both: an invisible leading or trailing space would make the
+    // collector look for a network that does not exist.
     final ssid = _ssidController.text.trim();
-    final password = _passwordController.text;
+    final password = _passwordController.text.trim();
     if (ssid.isEmpty || password.isEmpty) {
       setState(() => _status = 'নাম আর পাসওয়ার্ড দুটোই লাগবে।');
       return;
@@ -293,9 +295,10 @@ class _HomePageState extends State<HomePage> {
         setState(() => _status = 'সেভ করা তথ্য পাওয়া যায়নি। আবার সেভ করো।');
         return;
       }
-      await _ble.provision(ssid, password);
-      setState(() => _status =
-          'পাঠানো হয়েছে। ২ মিনিট অপেক্ষা করো, তারপর Things-X এ অনলাইন দেখো।');
+      final foundSsids = await _ble.provision(ssid, password);
+      setState(() => _status = 'পাঠানো হয়েছে। ২ মিনিট অপেক্ষা করো, তারপর '
+          'Things-X এ অনলাইন দেখো।'
+          '${foundSsids.isEmpty ? '' : ' কালেক্টর দেখেছে: ${foundSsids.join(', ')}।'}');
     } catch (e) {
       setState(() => _status = 'হয়নি: $e');
     } finally {
