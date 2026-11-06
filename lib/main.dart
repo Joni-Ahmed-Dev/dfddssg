@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -55,6 +57,12 @@ class _HomePageState extends State<HomePage> {
   // Whether the collector is in Bluetooth range right now, as reported
   // by the auto-reconnect service. Null means no scan has reported yet.
   bool? _inRange;
+  // When the background service last reported a status. The app scans
+  // Bluetooth itself only when the service has been silent, so the two
+  // never fight over Bluetooth and the indicator cannot stay stuck on
+  // "searching" when the service is not reporting.
+  DateTime? _lastServiceReportAt;
+  Timer? _rangeTimer;
 
   @override
   void initState() {
@@ -63,14 +71,61 @@ class _HomePageState extends State<HomePage> {
     _refreshSaved();
     _refreshAutoRunning();
     _refreshWorkerStatus();
+    _rangeTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _checkRangeAndService();
+    });
+    _checkRangeAndService();
   }
 
   @override
   void dispose() {
+    _rangeTimer?.cancel();
     FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
     _ssidController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  /// Keeps the toggle and the range indicator honest while the app is
+  /// open. The background service is the authority when it reports;
+  /// when it has been silent for a while, the app checks Bluetooth
+  /// itself so the indicator updates even then.
+  Future<void> _checkRangeAndService() async {
+    if (!mounted) return;
+    // Re-check whether the service is actually running, so the toggle
+    // and the status text cannot drift from reality. Skip while the
+    // user is flipping the toggle.
+    if (!_autoBusy) {
+      final running = await AutoReconnect.isRunning;
+      if (mounted) {
+        setState(() {
+          _autoRunning = running;
+          if (running && _autoDetail == 'অটো রিকানেক্ট বন্ধ আছে।') {
+            _autoDetail = 'অটো রিকানেক্ট চালু আছে।';
+          } else if (!running) {
+            _autoDetail = 'অটো রিকানেক্ট বন্ধ আছে।';
+          }
+        });
+      }
+    }
+    // Scan Bluetooth ourselves only when the service has not reported
+    // recently; otherwise trust its scan and stay out of its way.
+    // Note: when another app (for example Things-X) is connected to
+    // the collector, the collector stops advertising, so no scan can
+    // see it. That is normal Bluetooth behaviour, not a broken scan.
+    final silent = _lastServiceReportAt == null ||
+        DateTime.now().difference(_lastServiceReportAt!) >
+            const Duration(minutes: 2);
+    if (!silent || _busy) return;
+    try {
+      final found = await _ble.scanForCollector(
+        timeout: const Duration(seconds: 8),
+      );
+      if (!mounted) return;
+      setState(() => _inRange = found);
+    } catch (_) {
+      // Bluetooth busy or unavailable; keep the previous value.
+    }
   }
 
   void _onReceiveTaskData(Object data) {
@@ -78,6 +133,7 @@ class _HomePageState extends State<HomePage> {
     if (data['type'] != 'auto_status') return;
     if (!mounted) return;
     setState(() {
+      _lastServiceReportAt = DateTime.now();
       _autoDetail = (data['detail'] as String?) ?? _autoDetail;
       final inRange = data['inRange'];
       if (inRange is bool) _inRange = inRange;
