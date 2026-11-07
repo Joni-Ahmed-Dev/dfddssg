@@ -11,46 +11,38 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: one-tap-app
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.27.4'
           channel: stable
+          cache: true
 
-      - name: Generate Android scaffold from Flutter template
-        run: |
-          flutter create --org com.example --project-name inverter_one_tap /tmp/template_app
-          rm -rf ./android
-          cp -r /tmp/template_app/android ./android
-          cp /tmp/template_app/analysis_options.yaml ./analysis_options.yaml || true
-          cp android-manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-          ls android/app/src/main/
+      - name: Scaffold Android project
+        run: flutter create --org com.aminul --project-name inverter_one_tap --platforms android .
 
-      - name: Get dependencies
+      - name: Use custom AndroidManifest
+        run: cp android-manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+      - name: Get packages
         run: flutter pub get
 
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: inverter-one-tap-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Create release with APK
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
-          body: "One-tap inverter app build from ${{ github.sha }}. BLE protocol filled from the 2026-11-06 HCI snoop log (WIFI_SET over char 0xFF99)."
-          files: build/app/outputs/flutter-apk/app-release.apk
+          name: build-${{ github.run_number }}
+          files: one-tap-app/build/app/outputs/flutter-apk/app-release.apk
