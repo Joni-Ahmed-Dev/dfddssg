@@ -55,29 +55,16 @@ class _HomePageState extends State<HomePage> {
   String _workerLine = 'Worker এর অবস্থা জানা নেই।';
   String _lastAttemptLine = '';
   // Whether the collector is in Bluetooth range right now. Null means
-  // no scan has reported yet.
+  // no scan has reported yet. One scan decides it: found means in
+  // range, not found means not near. No double check.
   bool? _inRange;
-  // Consecutive scans that did not find the collector. The dot only
-  // flips to "not near" after 2 misses in a row, so one missed scan
-  // (the collector advertises in bursts, or another scan was running)
-  // does not make it flicker.
-  int _rangeMissCount = 0;
   // When the background service last reported a status.
   DateTime? _lastServiceReportAt;
   Timer? _rangeTimer;
 
-  /// Updates the range indicator with hysteresis: a find shows at once,
-  /// but a miss only counts after 2 in a row. Call inside setState.
+  /// Updates the range indicator from one scan result. Call inside setState.
   void _updateInRange(bool found) {
-    if (found) {
-      _rangeMissCount = 0;
-      _inRange = true;
-    } else {
-      _rangeMissCount += 1;
-      if (_rangeMissCount >= 2) {
-        _inRange = false;
-      }
-    }
+    _inRange = found;
   }
 
   @override
