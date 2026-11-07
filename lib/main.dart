@@ -54,15 +54,31 @@ class _HomePageState extends State<HomePage> {
   String _autoDetail = 'অটো রিকানেক্ট বন্ধ আছে।';
   String _workerLine = 'Worker এর অবস্থা জানা নেই।';
   String _lastAttemptLine = '';
-  // Whether the collector is in Bluetooth range right now, as reported
-  // by the auto-reconnect service. Null means no scan has reported yet.
+  // Whether the collector is in Bluetooth range right now. Null means
+  // no scan has reported yet.
   bool? _inRange;
-  // When the background service last reported a status. The app scans
-  // Bluetooth itself only when the service has been silent, so the two
-  // never fight over Bluetooth and the indicator cannot stay stuck on
-  // "searching" when the service is not reporting.
+  // Consecutive scans that did not find the collector. The dot only
+  // flips to "not near" after 2 misses in a row, so one missed scan
+  // (the collector advertises in bursts, or another scan was running)
+  // does not make it flicker.
+  int _rangeMissCount = 0;
+  // When the background service last reported a status.
   DateTime? _lastServiceReportAt;
   Timer? _rangeTimer;
+
+  /// Updates the range indicator with hysteresis: a find shows at once,
+  /// but a miss only counts after 2 in a row. Call inside setState.
+  void _updateInRange(bool found) {
+    if (found) {
+      _rangeMissCount = 0;
+      _inRange = true;
+    } else {
+      _rangeMissCount += 1;
+      if (_rangeMissCount >= 2) {
+        _inRange = false;
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -71,7 +87,10 @@ class _HomePageState extends State<HomePage> {
     _refreshSaved();
     _refreshAutoRunning();
     _refreshWorkerStatus();
-    _rangeTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    // Check range often while the app is open, so the dot follows the
+    // collector within seconds instead of a minute. The service still
+    // scans once a minute for the auto-reconnect logic.
+    _rangeTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _checkRangeAndService();
     });
     _checkRangeAndService();
@@ -87,9 +106,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Keeps the toggle and the range indicator honest while the app is
-  /// open. The background service is the authority when it reports;
-  /// when it has been silent for a while, the app checks Bluetooth
-  /// itself so the indicator updates even then.
+  /// open. The app scans Bluetooth itself every 10 seconds, so the dot
+  /// follows the collector within seconds even when standing next to
+  /// it. The service still scans once a minute for auto-reconnect.
+  /// Note: when another app (for example Things-X) is connected to
+  /// the collector, the collector stops advertising, so no scan can
+  /// see it. That is normal Bluetooth behaviour, not a broken scan.
   Future<void> _checkRangeAndService() async {
     if (!mounted) return;
     // Re-check whether the service is actually running, so the toggle
@@ -108,21 +130,13 @@ class _HomePageState extends State<HomePage> {
         });
       }
     }
-    // Scan Bluetooth ourselves only when the service has not reported
-    // recently; otherwise trust its scan and stay out of its way.
-    // Note: when another app (for example Things-X) is connected to
-    // the collector, the collector stops advertising, so no scan can
-    // see it. That is normal Bluetooth behaviour, not a broken scan.
-    final silent = _lastServiceReportAt == null ||
-        DateTime.now().difference(_lastServiceReportAt!) >
-            const Duration(minutes: 2);
-    if (!silent || _busy) return;
+    if (_busy) return;
     try {
       final found = await _ble.scanForCollector(
-        timeout: const Duration(seconds: 8),
+        timeout: const Duration(seconds: 6),
       );
       if (!mounted) return;
-      setState(() => _inRange = found);
+      setState(() => _updateInRange(found));
     } catch (_) {
       // Bluetooth busy or unavailable; keep the previous value.
     }
@@ -136,7 +150,7 @@ class _HomePageState extends State<HomePage> {
       _lastServiceReportAt = DateTime.now();
       _autoDetail = (data['detail'] as String?) ?? _autoDetail;
       final inRange = data['inRange'];
-      if (inRange is bool) _inRange = inRange;
+      if (inRange is bool) _updateInRange(inRange);
       final lastAttempt = data['lastAttempt'] as String?;
       final lastAttemptAt = data['lastAttemptAt'] as int?;
       if (lastAttempt != null && lastAttempt != 'none' && lastAttemptAt != null) {
