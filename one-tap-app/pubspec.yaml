@@ -1,0 +1,19 @@
+name: inverter_one_tap
+description: Inverter collector Wi-Fi auto reconnect over Bluetooth
+publish_to: 'none'
+version: 2.0.0+20
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_blue_plus: ^1.34.5
+  flutter_foreground_task: 8.17.0
+  flutter_secure_storage: ^9.2.4
+  permission_handler: ^11.3.1
+  http: ^1.2.2
+
+flutter:
+  uses-material-design: true
